@@ -1,11 +1,11 @@
-FROM python:3.11-slim
+FROM python:3.11-alpine
 
 WORKDIR /app
 
 # Копируем requirements.txt
 COPY requirements.txt .
 
-# Простая установка зависимостей
+# Устанавливаем зависимости
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
