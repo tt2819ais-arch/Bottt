@@ -16,6 +16,9 @@ TOKEN = "8491774226:AAHvZR02IZ4lhUAmgFCuCOAYE9atAmbcYKc"
 # Суперадмины (фиксированные)
 SUPER_ADMINS = ["@MaksimXyila", "@ar_got"]
 
+# Целевая сумма для автоматического отчета
+TARGET_AMOUNT = 5000  # Можно изменить на нужное значение
+
 # Хранилище данных в памяти
 class BotData:
     def __init__(self):
@@ -23,6 +26,7 @@ class BotData:
         self.active_agent = None  # текущий активный агент
         self.admin_mode = {}  # chat_id -> режим ожидания баланса
         self.transfer_data = {}  # chat_id -> данные для перевода
+        self.rub_mode = {}  # chat_id -> режим ожидания суммы для /rub
         
         # Данные агентов
         self.agent_balance = {}  # username -> баланс
@@ -59,7 +63,56 @@ def extract_username(text: str) -> str:
     match = re.search(r'@(\w+)', text)
     return f"@{match.group(1)}" if match else None
 
+def is_agent(username: str) -> bool:
+    """Проверяет, является ли пользователь агентом"""
+    return username in bot_data.agents
+
 # Обработчики команд
+async def rub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка команды /rub для установки суммы"""
+    if not is_admin(update):
+        return
+    
+    chat_id = update.effective_chat.id
+    
+    # Проверяем, указана ли сумма в команде
+    if context.args:
+        amount_text = ' '.join(context.args)
+        # Извлекаем число из текста
+        match = re.search(r'(\d+)', amount_text)
+        if match:
+            amount = int(match.group(1))
+            
+            if not bot_data.active_agent:
+                await update.message.reply_text("❌ Нет активного агента. Сначала назначьте агента.")
+                return
+            
+            # Устанавливаем сумму для активного агента
+            bot_data.agent_rolled[bot_data.active_agent] = amount
+            
+            # Получаем баланс агента
+            balance = bot_data.agent_balance.get(bot_data.active_agent, 0)
+            remaining = balance - amount if balance >= amount else 0
+            
+            # Отправляем отчет
+            report = (
+                f"💰 Сумма установлена: {amount}₽\n"
+                f"Баланс: {balance}₽\n"
+                f"Откручено: {amount}₽\n"
+                f"Осталось: {remaining}₽"
+            )
+            await update.message.reply_text(report)
+            
+            # Проверяем достижение целевой суммы
+            if amount >= TARGET_AMOUNT:
+                await send_auto_report(update, bot_data.active_agent, amount, "")
+            
+            return
+    
+    # Если сумма не указана, переходим в режим ожидания
+    bot_data.rub_mode[chat_id] = True
+    await update.message.reply_text("Введите сумму для установки:")
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка всех сообщений"""
     message = update.effective_message
@@ -70,6 +123,49 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Игнорируем сообщения от самого бота
     if user.id == context.bot.id:
         return
+    
+    # Проверка на команду /rub в тексте (обработка без CommandHandler)
+    if text.startswith('/rub'):
+        await rub_command(update, context)
+        return
+    
+    # Обработка ввода суммы для команды /rub
+    if chat_id in bot_data.rub_mode and bot_data.rub_mode[chat_id]:
+        if re.fullmatch(r'\d+', text):
+            amount = int(text)
+            
+            if not bot_data.active_agent:
+                await message.reply_text("❌ Нет активного агента.")
+                bot_data.rub_mode.pop(chat_id, None)
+                return
+            
+            # Устанавливаем сумму
+            bot_data.agent_rolled[bot_data.active_agent] = amount
+            
+            # Получаем баланс
+            balance = bot_data.agent_balance.get(bot_data.active_agent, 0)
+            remaining = balance - amount if balance >= amount else 0
+            
+            # Отправляем отчет
+            report = (
+                f"💰 Сумма установлена: {amount}₽\n"
+                f"Баланс: {balance}₽\n"
+                f"Откручено: {amount}₽\n"
+                f"Осталось: {remaining}₽"
+            )
+            await message.reply_text(report)
+            
+            # Проверка достижения цели
+            if amount >= TARGET_AMOUNT:
+                await send_auto_report(update, bot_data.active_agent, amount, "")
+            
+            # Выходим из режима
+            bot_data.rub_mode.pop(chat_id, None)
+            return
+        else:
+            await message.reply_text("❌ Введите корректное число.")
+            bot_data.rub_mode.pop(chat_id, None)
+            return
     
     # Приведение к нижнему регистру для некоторых проверок
     text_lower = text.lower()
@@ -227,9 +323,8 @@ async def send_transfer_report(update: Update, data: dict):
     amount = data.get("amount", 0)
     
     # Логика вычисления открученного и остатка
-    # Здесь можно реализовать свою бизнес-логику
-    rolled = amount  # Простой пример: откручено = сумма перевода
-    remaining = balance - rolled
+    rolled = amount
+    remaining = balance - rolled if balance >= rolled else 0
     
     # Сохраняем данные
     bot_data.agent_rolled[agent_username] = rolled
@@ -242,15 +337,13 @@ async def send_transfer_report(update: Update, data: dict):
     
     await update.effective_message.reply_text(report)
     
-    # Проверка на достижение целевой суммы (пример: 5000)
-    TARGET_AMOUNT = 5000  # Здесь нужно указать вашу целевую сумму
+    # Проверка на достижение целевой суммы
     if rolled >= TARGET_AMOUNT:
         await send_auto_report(update, agent_username, rolled, data.get("bank", ""))
 
 async def send_auto_report(update: Update, agent_username: str, rolled_amount: int, bank: str):
     """Автоматический отчет при достижении суммы"""
     # Здесь должен быть номер телефона из анкеты агента
-    # В реальной реализации нужно хранить анкетные данные
     phone = bot_data.agent_info.get(agent_username, {}).get("phone", "не указан")
     
     report = (
@@ -277,6 +370,9 @@ def main():
     """Запуск бота"""
     # Создаем приложение
     application = Application.builder().token(TOKEN).build()
+    
+    # Добавляем обработчик команды /rub
+    application.add_handler(CommandHandler("rub", rub_command))
     
     # Обработчик всех текстовых сообщений
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
