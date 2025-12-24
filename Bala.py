@@ -23,20 +23,19 @@ TARGET_AMOUNT = 5000
 # Хранилище данных в памяти
 class BotData:
     def __init__(self):
-        self.agents = {}  # username -> {status, phone, card, account, name}
+        self.agents = {}
         self.active_agent = None
         self.admin_mode = {}
         self.rub_mode = {}
         self.transfer_sequence = {}
-        self.waiting_balance = {}  # chat_id -> target_username для баланса
+        self.waiting_balance = {}
         
-        # Данные агентов
-        self.agent_balance = {}  # username -> баланс
-        self.agent_rolled = {}   # username -> ОБЩАЯ сумма открутки
-        self.agent_transfers = {}  # username -> список переводов [{amount, requisite, bank, date}]
-        self.agent_notes = {}    # username -> заметки
+        self.agent_balance = {}
+        self.agent_rolled = {}
+        self.agent_transfers = {}
+        self.agent_notes = {}
         
-        self.notes_history = []  # история всех реквизитов
+        self.notes_history = []
 
 bot_data = BotData()
 
@@ -60,12 +59,7 @@ def extract_username(text: str) -> str:
     match = re.search(r'@(\w+)', text)
     return f"@{match.group(1)}" if match else None
 
-def is_agent(username: str) -> bool:
-    return username in bot_data.agents
-
-# Команды /start и /help
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /start - информация о боте"""
     help_text = (
         "🤖 Бот-администратор группового чата\n\n"
         "📋 Основные команды и триггеры:\n"
@@ -74,8 +68,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• агенту @username - назначить агента\n"
         "• делагент @username - зарегистрировать агента\n"
         "• делагент - сбросить всех агентов\n"
-        "• Бал @username - запросить баланс конкретного агента\n"
-        "• /rub [сумма!] - начать прокрутку (например: /rub 1000!)\n"
+        "• Бал @username - запросить баланс агента (не обязательно)\n"
+        "• /rub сумма! - начать работу с агентом (например: /rub 1000!)\n"
         "• подключа / Подключаю - отправить инструкции агенту\n"
         "• /notes - история реквизитов\n\n"
         "📌 Для всех:\n"
@@ -91,11 +85,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_text)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /help - подробная справка"""
     await start_command(update, context)
 
 async def rub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка команды /rub для установки суммы открутки"""
     if not is_admin(update):
         return
     
@@ -103,42 +95,43 @@ async def rub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Нет активного агента. Сначала назначьте агента.")
         return
     
-    # Проверяем, указана ли сумма в команде
     if context.args:
         amount_text = ' '.join(context.args)
-        # Проверяем формат с !
         if '!' in amount_text:
             match = re.search(r'(\d+)', amount_text)
             if match:
                 amount = int(match.group(1))
                 
-                # Устанавливаем сумму открутки для активного агента
                 bot_data.agent_rolled[bot_data.active_agent] = amount
                 
-                # Получаем баланс агента
+                # Получаем баланс агента (если есть)
                 balance = bot_data.agent_balance.get(bot_data.active_agent, 0)
                 remaining = balance - amount if balance >= amount else 0
                 
-                # Отправляем отчет
                 report = (
-                    f"💰 Начата прокрутка для {bot_data.active_agent}\n"
+                    f"🔄 Начата работа с агентом {bot_data.active_agent}\n"
                     f"─────────────────────\n"
-                    f"Сумма открутки: {amount}₽\n"
-                    f"Баланс агента: {balance}₽\n"
-                    f"Остаток после открутки: {remaining}₽\n"
-                    f"─────────────────────\n"
-                    f"Теперь отправьте реквизиты для перевода"
+                    f"Сумма перевода: {amount}₽\n"
                 )
+                
+                if balance > 0:
+                    report += f"Баланс агента: {balance}₽\n"
+                    report += f"Остаток после перевода: {remaining}₽\n"
+                else:
+                    report += f"Баланс агента: не установлен\n"
+                
+                report += "─────────────────────\n"
+                report += "Теперь отправьте реквизиты для перевода"
+                
                 await update.message.reply_text(report)
                 return
         else:
-            await update.message.reply_text("❌ Используйте формат: /rub 1000!")
+            await update.message.reply_text("❌ Используйте формат: /rub сумма! (например: /rub 1000!)")
             return
     
-    await update.message.reply_text("❌ Используйте: /rub [сумма!] (например: /rub 1000!)")
+    await update.message.reply_text("❌ Используйте: /rub сумма! (например: /rub 1000!)")
 
 async def notes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /notes - история реквизитов"""
     if not is_admin(update):
         return
     
@@ -148,28 +141,24 @@ async def notes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     notes_text = "📝 История реквизитов:\n─────────────────────\n"
     
-    for i, note in enumerate(bot_data.notes_history[-10:], 1):  # Последние 10 записей
+    for i, note in enumerate(bot_data.notes_history[-10:], 1):
         notes_text += f"{i}. {note['requisite']}, {note['amount']}₽, {note['bank']}\n"
     
     notes_text += f"\nВсего записей: {len(bot_data.notes_history)}"
     await update.message.reply_text(notes_text)
 
 async def handle_transfer_sequence(update: Update, context: CallbackContext, text: str):
-    """Обработка последовательности перевода"""
     chat_id = update.effective_chat.id
-    user = update.effective_user
     
-    # Проверяем, является ли пользователь админом
     if not is_admin(update):
         return
     
-    # Инициализируем последовательность если её нет
     if chat_id not in bot_data.transfer_sequence:
         bot_data.transfer_sequence[chat_id] = {"step": 0, "data": {}}
     
     current_data = bot_data.transfer_sequence[chat_id]
     
-    # Шаг 1: Реквизит (телефон или карта)
+    # Шаг 1: Реквизит
     if current_data["step"] == 0:
         if text and len(text) > 5:
             current_data["data"]["requisite"] = text
@@ -178,7 +167,7 @@ async def handle_transfer_sequence(update: Update, context: CallbackContext, tex
             logger.info(f"Шаг 1: Реквизит установлен: {text}")
         return
     
-    # Шаг 2: Сумма с восклицательным знаком
+    # Шаг 2: Сумма
     elif current_data["step"] == 1:
         sum_pattern = r'^!?\d+!?$'
         if re.match(sum_pattern, text):
@@ -216,7 +205,7 @@ async def handle_transfer_sequence(update: Update, context: CallbackContext, tex
             current_data["step"] = 4
             bot_data.transfer_sequence[chat_id] = current_data
             
-            # Сохраняем в историю реквизитов
+            # Сохраняем в историю
             bot_data.notes_history.append({
                 "requisite": current_data["data"].get("requisite", ""),
                 "amount": current_data["data"].get("amount", 0),
@@ -225,11 +214,9 @@ async def handle_transfer_sequence(update: Update, context: CallbackContext, tex
                 "agent": bot_data.active_agent
             })
             
-            # Отправляем отчет
             logger.info(f"Шаг 4: Почта получена: {text}")
             await send_transfer_report(update, current_data["data"])
             
-            # Сбрасываем последовательность
             bot_data.transfer_sequence.pop(chat_id, None)
         else:
             bot_data.transfer_sequence.pop(chat_id, None)
@@ -237,20 +224,18 @@ async def handle_transfer_sequence(update: Update, context: CallbackContext, tex
         return
 
 async def send_transfer_report(update: Update, data: dict):
-    """Отправка отчета о переводе"""
     if not bot_data.active_agent:
         await update.effective_message.reply_text("⚠️ Нет активного агента.")
         return
     
     agent_username = bot_data.active_agent
-    balance = bot_data.agent_balance.get(agent_username, 0)
     amount = data.get("amount", 0)
     
-    # "Откручено" - это сумма текущего перевода
-    # НЕ складываем с предыдущими!
-    bot_data.agent_rolled[agent_username] = amount
+    # Получаем баланс (если установлен)
+    balance = bot_data.agent_balance.get(agent_username, 0)
     
-    remaining = balance - amount if balance >= amount else 0
+    # Откручено - сумма текущего перевода
+    bot_data.agent_rolled[agent_username] = amount
     
     # Сохраняем перевод
     if agent_username not in bot_data.agent_transfers:
@@ -263,12 +248,22 @@ async def send_transfer_report(update: Update, data: dict):
         "date": datetime.now().strftime("%d.%m.%Y %H:%M")
     })
     
+    # Формируем отчет
     report = (
         f"📊 Статистика для {agent_username}:\n"
         f"─────────────────────\n"
-        f"Баланс на карте: {balance}₽\n"
-        f"Откручено (переведено): {amount}₽\n"
-        f"Осталось на карте: {remaining}₽\n"
+    )
+    
+    if balance > 0:
+        remaining = balance - amount if balance >= amount else 0
+        report += f"Баланс на карте: {balance}₽\n"
+        report += f"Сумма перевода: {amount}₽\n"
+        report += f"Остаток на карте: {remaining}₽\n"
+    else:
+        report += f"Сумма перевода: {amount}₽\n"
+        report += f"Баланс на карте: не установлен\n"
+    
+    report += (
         f"─────────────────────\n"
         f"Реквизит: {data.get('requisite', '')}\n"
         f"Банк: {data.get('bank', '')}"
@@ -282,7 +277,6 @@ async def send_transfer_report(update: Update, data: dict):
         await send_auto_report(update, agent_username, total_rolled, data.get("bank", ""))
 
 async def send_auto_report(update: Update, agent_username: str, rolled_amount: int, bank: str):
-    """Автоматический отчет при достижении суммы"""
     phone = bot_data.agents.get(agent_username, {}).get("phone", "не указан")
     
     report = (
@@ -290,7 +284,7 @@ async def send_auto_report(update: Update, agent_username: str, rolled_amount: i
         f"─────────────────────\n"
         f"Агент: {agent_username}\n"
         f"Номер телефона: {phone}\n"
-        f"Общая открутка: {rolled_amount}₽\n"
+        f"Общая сумма переводов: {rolled_amount}₽\n"
         f"Банк: {bank}\n"
         f"─────────────────────\n"
         f"✅ Автоматический отчет"
@@ -299,7 +293,6 @@ async def send_auto_report(update: Update, agent_username: str, rolled_amount: i
     await update.effective_message.reply_text(report)
 
 async def send_help_instructions(update: Update, username: str):
-    """Отправка инструкций помощи"""
     instructions = (
         f"@{username}- Сейчас тебе будет приходить денюжка. Каждое поступление - мне скрин из истории операций. "
         "Не отдельного перевода, а прям страницу истории, списком.\n"
@@ -311,13 +304,11 @@ async def send_help_instructions(update: Update, username: str):
     await update.effective_message.reply_text(instructions)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка всех сообщений"""
     message = update.effective_message
     user = update.effective_user
     text = message.text.strip() if message.text else ""
     chat_id = message.chat_id
     
-    # Игнорируем сообщения от самого бота
     if user.id == context.bot.id:
         return
     
@@ -325,15 +316,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     text_lower = text.lower()
     
-    # 2.2. Запрос инструкции "хелп" от любого пользователя
     if text_lower == "хелп":
         await send_help_instructions(update, user.username)
         return
     
-    # Проверка, является ли пользователь админом
     admin = is_admin(update)
     
-    # 2.1. Назначение агента командой админа
     if admin and text.startswith("агенту "):
         username = extract_username(text)
         if username:
@@ -350,22 +338,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
     
-    # Запрос баланса от админа с указанием агента: Бал @username
+    # Запрос баланса (не обязательно)
     if admin and text_lower.startswith("бал"):
-        # Ищем username в сообщении
         target_username = extract_username(text)
         
         if target_username:
-            # Проверяем, что это агент
             if target_username not in bot_data.agents:
                 await message.reply_text(f"❌ {target_username} не является агентом.")
                 return
             
-            # Устанавливаем ожидание ответа от ЭТОГО агента
             bot_data.waiting_balance[chat_id] = target_username
             await message.reply_text(f"⏳ Ожидаю ответ от {target_username} с суммой баланса...")
         else:
-            # Если username не указан, используем активного агента
             if bot_data.active_agent:
                 bot_data.waiting_balance[chat_id] = bot_data.active_agent
                 await message.reply_text(f"⏳ Ожидаю ответ от {bot_data.active_agent} с суммой баланса...")
@@ -373,11 +357,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await message.reply_text("❌ Укажите агента: Бал @username")
         return
     
-    # Обработка ответа на запрос баланса ОТ АГЕНТА
+    # Обработка ответа на запрос баланса
     if chat_id in bot_data.waiting_balance:
         target_username = bot_data.waiting_balance[chat_id]
         
-        # Проверяем, что отвечает ПРАВИЛЬНЫЙ агент
         if user.username and f"@{user.username}" == target_username:
             if re.fullmatch(r'\d+', text):
                 amount = int(text)
@@ -386,11 +369,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await message.reply_text(f"✅ Баланс {target_username} установлен: {amount}₽")
                 return
         else:
-            # Если отвечает не тот пользователь
             await message.reply_text(f"⏳ Жду ответ от {target_username}...")
             return
     
-    # 2.3. Подтверждение подключения (содержит "подключа")
     if admin and "подключа" in text_lower:
         if bot_data.active_agent:
             await send_help_instructions(update, bot_data.active_agent.replace("@", ""))
@@ -398,7 +379,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await message.reply_text("⚠️ Сначала назначьте агента")
         return
     
-    # 3. Административные команды
     if admin and text.startswith("делагент"):
         if " " in text:
             username = extract_username(text)
@@ -415,7 +395,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "Есть вопросы? Пропиши «хелп»"
                 )
         else:
-            # Сброс ВСЕХ данных при команде "делагент"
             bot_data.agents.clear()
             bot_data.active_agent = None
             bot_data.agent_balance.clear()
@@ -427,35 +406,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             bot_data.transfer_sequence.clear()
             bot_data.admin_mode.clear()
             bot_data.rub_mode.clear()
-            # Не отправляем сообщение в чат
         return
     
-    # 2.4. Цикл фиксации задачи на перевод от админа
     if admin:
         await handle_transfer_sequence(update, context, text)
         return
-    
-    # Во всех остальных случаях не реагируем
-    return
 
 def main():
-    """Запуск бота"""
     application = Application.builder().token(TOKEN).build()
     
-    # Добавляем обработчики команд
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("rub", rub_command))
     application.add_handler(CommandHandler("notes", notes_command))
     
-    # Обработчик всех текстовых сообщений
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # Запускаем бота
     print("🤖 Бот запущен...")
     print("📋 Доступные команды: /start, /help, /rub, /notes")
     print("📌 Триггеры: агенту @username, делагент, Бал @username, хелп, подключа")
-    print("💸 Цикл перевода: реквизит → сумма! → банк → почта")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
